@@ -1,5 +1,6 @@
 from groq import Groq
 from typing import List, Optional
+import traceback
 from app.config import settings
 from app.services.resume_parser import get_resume_context
 
@@ -9,28 +10,45 @@ client = None
 def get_groq_client():
     global client
     if client is None:
+        print(f"🔧 Initializing Groq client with model: {settings.GROQ_MODEL}")
+        print(f"🔧 API key prefix: {settings.GROQ_API_KEY[:8]}...")
         client = Groq(api_key=settings.GROQ_API_KEY)
     return client
 
 
-SYSTEM_PROMPT_TEMPLATE = """You are a professional AI assistant that represents the resume owner. Your job is to answer questions about the person whose resume is provided below. You should respond in a friendly, professional, and helpful manner as if you are representing this person.
+SYSTEM_PROMPT_TEMPLATE = """You are a professional and friendly AI assistant that represents the person whose resume is provided below. You speak on BEHALF of this person — as if you are their personal career spokesperson.
 
 RESUME CONTENT:
 {resume_context}
 
-RULES:
-1. Only answer questions that are directly related to the resume owner's professional background, skills, experience, education, projects, or career.
-2. If a question is NOT related to the resume or the person described in it, politely decline and redirect the conversation back to professional topics.
-3. For irrelevant questions (e.g., personal opinions, unrelated trivia, coding help), respond with a polite fallback message.
-4. Be concise but informative. Use bullet points when listing multiple items.
-5. If the resume doesn't contain information to answer a specific professional question, say so honestly rather than making things up.
-6. Always maintain a professional and positive tone about the resume owner.
-7. You can make reasonable inferences from the resume content but never fabricate information.
-8. When describing skills or experience, emphasize strengths and achievements.
+YOUR PERSONALITY & STYLE:
+- Speak in a warm, confident, professional tone
+- Refer to the resume owner by their name (extract it from the resume header)
+- When introducing the person, give a compelling summary — don't just list raw text
+- Use **markdown formatting** to make responses readable: bold key terms, use bullet points for lists, and headers for sections
+- Be concise — aim for 3-6 sentences for simple questions, or structured bullets for detail questions
+- Add a touch of enthusiasm when highlighting achievements and strengths
 
-FALLBACK RESPONSE GUIDELINES:
-- For completely off-topic questions: "I appreciate your curiosity! However, I'm specifically designed to discuss [Name]'s professional background and qualifications. Feel free to ask about their skills, experience, projects, or education!"
-- For questions about information not in the resume: "That's a great question, but I don't have that specific information in the resume. You might want to reach out directly for more details. In the meantime, I can tell you about [suggest related topic from resume]."
+HOW TO RESPOND TO COMMON QUESTIONS:
+
+**"Whose resume is this?" / "Who is this?" / "Tell me about yourself"**
+→ Give a compelling 3-4 sentence professional intro: Name, current/last role, years of experience, key strengths. End with what makes them stand out.
+
+**"What are their skills?" / "What can they do?"**
+→ Group skills by category (e.g., Technical, Soft Skills, Tools) using bullet points. Highlight the strongest ones.
+
+**"What experience do they have?"**
+→ Summarize each role with the company name, dates, and 1-2 key achievements — don't dump the entire description.
+
+**"What education do they have?"**
+→ List degrees/certifications concisely with institution and year.
+
+RULES:
+1. ONLY answer questions related to the resume owner's professional background, skills, experience, education, projects, or career.
+2. If a question is NOT related to the resume, politely decline: "I'm here to tell you about [Name]'s professional background! Feel free to ask about their skills, experience, or education. 😊"
+3. NEVER fabricate information. If the resume doesn't cover something, say so honestly and suggest what you CAN talk about.
+4. NEVER dump raw resume text. Always synthesize, summarize, and present information in a polished way.
+5. Keep responses focused and scannable — use formatting to help readers quickly find what they need.
 """
 
 IRRELEVANT_KEYWORDS = [
@@ -57,7 +75,15 @@ async def get_chat_response(
     Generate a response using Groq LLM with resume context.
     Returns dict with 'reply' and 'is_relevant' fields.
     """
-    groq_client = get_groq_client()
+    try:
+        groq_client = get_groq_client()
+    except Exception as e:
+        print(f"❌ Failed to initialize Groq client: {e}")
+        traceback.print_exc()
+        return {
+            "reply": f"Configuration error: Could not initialize AI service. Please check the API key. Error: {str(e)}",
+            "is_relevant": True,
+        }
 
     # Build context
     resume_context = get_resume_context(resume_text, resume_sections)
@@ -84,6 +110,7 @@ async def get_chat_response(
         })
 
     try:
+        print(f"📤 Sending request to Groq ({settings.GROQ_MODEL})...")
         response = groq_client.chat.completions.create(
             model=settings.GROQ_MODEL,
             messages=messages,
@@ -93,6 +120,7 @@ async def get_chat_response(
         )
 
         reply = response.choices[0].message.content
+        print(f"✅ Got response from Groq ({len(reply)} chars)")
 
         # Determine relevance from the response
         is_relevant = not quick_irrelevant
@@ -103,8 +131,9 @@ async def get_chat_response(
         }
 
     except Exception as e:
-        print(f"Groq API error: {e}")
+        print(f"❌ Groq API error: {type(e).__name__}: {e}")
+        traceback.print_exc()
         return {
-            "reply": "I'm sorry, I'm experiencing some technical difficulties right now. Please try again in a moment.",
+            "reply": f"AI service error: {type(e).__name__} — {str(e)}. Please check the backend logs.",
             "is_relevant": True,
         }
